@@ -25,29 +25,15 @@ def get_quantization_matrix(quality_factor=50):
     quant_matrix[quant_matrix == 0] = 1
     return quant_matrix
 
-# Compute 2D DCT Coefficients
-
-def compute_dct(image, block_size=8):
+def compute_dct_and_quantize(image, block_size=8, quality_factor=50):
     h, w = image.shape
-    dct_blocks = np.zeros_like(image, dtype=np.float32)
+    final_out = np.zeros_like(image, dtype=np.int32)
+    quant_matrix = get_quantization_matrix(quality_factor)
     for i in range(0, h, block_size):
         for j in range(0, w, block_size):
             block = image[i:i+block_size, j:j+block_size]
-            dct_blocks[i:i+block_size, j:j+block_size] = cv2.dct(np.float32(block))
-    return dct_blocks
-
-# Quantize DCT Coefficients
-
-def quantize(dct_blocks, quant_matrix):
-    h, w = dct_blocks.shape
-    block_size = quant_matrix.shape[0]
-    quantized_blocks = np.zeros_like(dct_blocks, dtype=np.int32)
-    for i in range(0, h, block_size):
-        for j in range(0, w, block_size):
-            quantized_blocks[i:i+block_size, j:j+block_size] = np.round(
-                dct_blocks[i:i+block_size, j:j+block_size] / quant_matrix
-            ).astype(np.int32)
-    return quantized_blocks
+            final_out[i:i+block_size, j:j+block_size] = np.round((cv2.dct(np.float32(block))) / quant_matrix).astype(np.int32)
+    return final_out
 
 # Huffman
 
@@ -313,9 +299,9 @@ def decompress_data(Q, h, w, huffman_table, huffman_encoded_data):
     
     final_img = np.round(image)
     final_img[final_img > 255] = 255
+    final_img[final_img < 0] = 0
     return final_img.astype(np.uint8)
 
-#### Final main part
 def generate_compressed_file(image, output_filename, quality_factor):
     # Pad the image to make its dimensions a multiple of 8
     h, w = image.shape
@@ -325,19 +311,75 @@ def generate_compressed_file(image, output_filename, quality_factor):
     padded_image[:h, :w] = image
     image = padded_image
 
-    dct_coefficients = compute_dct(image)
-    quant_matrix = get_quantization_matrix(quality_factor)
-    quantized_coefficients = quantize(dct_coefficients, quant_matrix)
+    quantized_coefficients = compute_dct_and_quantize(image, quality_factor=quality_factor)
     zigzag_coefficients = zigzag_order_all_blocks(quantized_coefficients)
     rle_encoded_data = run_length_encoding(zigzag_coefficients)
     huffman_table, huffman_encoded_data = huffman_encoding(rle_encoded_data)
     write_compressed_data_to_file(output_filename, quality_factor, huffman_table, huffman_encoded_data, new_h, new_w)
 
-def decompress_image_from_file(compressed_filename, compressed_image_name):
+def decompress_image_from_file(compressed_filename, compressed_image_name = None):
     Q, h, w, huffman_table, huffman_encoded_data = read_compressed_data_from_file(compressed_filename)
     decompressed_image = decompress_data(Q, h, w, huffman_table, huffman_encoded_data)
-    decompressed_image_path = "../output/apag/decompressed_" + compressed_image_name + ".jpg"
-    cv2.imwrite(decompressed_image_path, decompressed_image)
+    if compressed_image_name is not None:
+        decompressed_image_path = "../output/apag/decompressed_" + compressed_image_name + ".jpg"
+        cv2.imwrite(decompressed_image_path, decompressed_image)
     return decompressed_image
 
-    
+### Color Image Compression
+
+def compress_image(image_path, output_filename, quality_factor):
+    color_image = cv2.imread(image_path)
+    h, w, _ = color_image.shape
+    new_h = (h + 15) // 16 * 16
+    new_w = (w + 7) // 8 * 8
+    padded_color_image = np.full((new_h, new_w, 3), 255, dtype=np.uint8)
+    padded_color_image[:h, :w, :] = color_image
+    color_image = padded_color_image
+
+    ycbcr_image = cv2.cvtColor(color_image, cv2.COLOR_BGR2YCrCb)
+    Y, Cb, Cr = cv2.split(ycbcr_image)
+    Cb_downsampled = cv2.resize(Cb, (Cb.shape[1] // 2, Cb.shape[0] // 2), interpolation=cv2.INTER_LINEAR)
+    Cr_downsampled = cv2.resize(Cr, (Cr.shape[1] // 2, Cr.shape[0] // 2), interpolation=cv2.INTER_LINEAR)
+
+    Cb_Cr_concatenated = np.concatenate((Cb_downsampled, Cr_downsampled), axis=1)
+    concatenated_array = np.concatenate((Y, Cb_Cr_concatenated), axis=0)
+    generate_compressed_file(concatenated_array, output_filename, quality_factor)
+
+def decompress_image(compressed_filename):
+    decompressed_image = decompress_image_from_file(compressed_filename)
+    shape_Y = (int(decompressed_image.shape[0]/3 * 2), decompressed_image.shape[1])
+    shape_Cr = shape_Cb = (int(decompressed_image.shape[0]/3), int(decompressed_image.shape[1]/2))
+    Y = decompressed_image[:shape_Y[0], :]
+    Cb_Cr = decompressed_image[shape_Y[0]:, :]
+    Cb = Cb_Cr[:, :shape_Cb[1]]
+    Cr = Cb_Cr[:, shape_Cb[1]:]
+    Cb = cv2.resize(Cb, (shape_Cb[1] * 2, shape_Cb[0] * 2), interpolation=cv2.INTER_LINEAR)
+    Cr = cv2.resize(Cr, (shape_Cr[1] * 2, shape_Cr[0] * 2), interpolation=cv2.INTER_LINEAR)
+    ycbcr_decompressed = cv2.merge((Y, Cb, Cr))
+    color_decompressed = cv2.cvtColor(ycbcr_decompressed, cv2.COLOR_YCrCb2BGR)
+    return color_decompressed
+
+
+
+
+# ##### Grayscale Image Compression
+# input_image_path = 'lion.jpg'
+# output_filename = 'compressed_output.bin'
+# quality_factor = 50
+# image = cv2.imread(input_image_path, cv2.IMREAD_GRAYSCALE)
+# generate_compressed_file(image, output_filename, quality_factor)
+# decompressed_image_path = 'decompressed_image.png'
+# decompressed_img = decompress_image_from_file(output_filename)
+# cv2.imwrite(decompressed_image_path, decompressed_img)
+# #####
+
+
+
+# ##### Color Image Compression
+# input_image_path = 'color1.jpg'
+# output_filename = 'compressed_output_ycbcr.bin'
+# quality_factor = 50
+# compress_image(input_image_path, output_filename, quality_factor)
+# color_decompressed = decompress_image(output_filename)
+# cv2.imwrite('decompressed_color_image.png', color_decompressed)
+# #####
