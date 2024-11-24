@@ -120,6 +120,26 @@ def plot_bpp_vs_rmse(jpeg_data, apag_data, name):
     plt.savefig(f"./output/plots/{name}_plot.png", dpi=300, format="png")
     #plt.show()
     
+
+# Plots all APAG RMSE vs BPP curves in a single plot.
+
+def plot_all_apag_compressions(apag_data_list, image_names):
+    plt.figure(figsize=(10, 8))
+
+    # Loop over each APAG data set and corresponding image name
+    for apag_data, name in zip(apag_data_list, image_names):
+        rmse_values, bpp_values = apag_data
+        plt.plot(bpp_values, rmse_values, marker="x", label=f"APAG - {name}")
+
+    # Configure plot settings
+    plt.title("BPP vs RMSE for All Images (APAG Compression)", fontsize=14)
+    plt.xlabel("Bits Per Pixel (BPP)", fontsize=12)
+    plt.ylabel("RMSE", fontsize=12)
+    plt.grid()
+    plt.legend()
+    plt.savefig("./output/plots/apag_all_images_plot.png", dpi=300, format="png")
+    #plt.show()
+
 def cleanup():
     directory_jpeg = "./output/jpeg"
     directory_apag = "./output/apag"
@@ -138,6 +158,9 @@ def cleanup():
 if __name__ == "__main__":
     cleanup()
     test_directory = './test_imgs'
+    all_apag_data = []  # Store APAG data for all images
+    image_names = []    # Store image names
+
     for filename in os.listdir(test_directory):
         name, ext = os.path.splitext(filename)
         original_image_path = test_directory + '/' + filename
@@ -145,5 +168,12 @@ if __name__ == "__main__":
         jpeg_data = jpeg_compression_metrics(original_image_path, name)
         apag_data = apag_compression_metrics(original_image_path, name)
 
-        # Step 2: Plot the BPP vs RMSE curve
+        # Plot the BPP vs RMSE curve
         plot_bpp_vs_rmse(jpeg_data, apag_data, name)
+
+        all_apag_data.append(apag_data)
+        image_names.append(name)
+
+    # Plot all APAG RMSE vs BPP curves in a single plot
+    plot_all_apag_compressions(all_apag_data, image_names)
+
